@@ -206,8 +206,9 @@ func (p *Proxy) socksUDPAssociate(ctx context.Context, l *cio.Logger, conn net.C
 				Dst:     dst,
 				Payload: append([]byte(nil), payload...),
 			}
+			l.Infof("UDP relay: send %s -> %s (%d bytes) via %s", srcAddr, dst, len(payload), rkey)
 			if err := p.udpMux.send(pkt); err != nil {
-				l.Debugf("UDP relay: mux send error: %s", err)
+				l.Infof("UDP relay: mux send error: %s", err)
 				return
 			}
 		}

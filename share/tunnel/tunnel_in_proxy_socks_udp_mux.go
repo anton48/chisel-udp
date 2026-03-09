@@ -90,27 +90,31 @@ func (m *socksUDPMux) ensureChannel(ctx context.Context) error {
 // readLoop reads responses from the shared SSH channel and dispatches them
 // to the correct relay based on pkt.Src (which is the relay key "r<port>").
 func (m *socksUDPMux) readLoop() {
+	m.logger.Infof("readLoop started")
+	var count int64
 	for {
 		var pkt socksUDPDatagram
 		if err := m.dec.Decode(&pkt); err != nil {
 			if err != io.EOF {
-				m.logger.Debugf("read error: %s", err)
+				m.logger.Infof("readLoop: decode error: %s", err)
 			}
+			m.logger.Infof("readLoop ended after %d responses", count)
 			m.closeChannel()
 			return
 		}
+		count++
 
 		m.relaysMu.RLock()
 		entry, ok := m.relays[pkt.Src]
 		m.relaysMu.RUnlock()
 
 		if !ok {
-			m.logger.Debugf("no relay for key %s (stale response?)", pkt.Src)
+			m.logger.Infof("readLoop: no relay for key %s from %s (stale response?)", pkt.Src, pkt.Dst)
 			continue
 		}
 
 		if entry.clientAddr == nil {
-			m.logger.Debugf("relay %s has no client address yet", pkt.Src)
+			m.logger.Infof("readLoop: relay %s has no client address yet", pkt.Src)
 			continue
 		}
 
@@ -121,7 +125,9 @@ func (m *socksUDPMux) readLoop() {
 		copy(data[len(header):], pkt.Payload)
 
 		if _, err := entry.relay.WriteToUDP(data, entry.clientAddr); err != nil {
-			m.logger.Debugf("write to client via %s: %s", pkt.Src, err)
+			m.logger.Infof("readLoop: write to client via %s failed: %s", pkt.Src, err)
+		} else {
+			m.logger.Infof("readLoop: response from %s -> relay %s -> client %s (%d bytes)", pkt.Dst, pkt.Src, entry.clientAddr, len(pkt.Payload))
 		}
 	}
 }

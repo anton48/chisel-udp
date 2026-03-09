@@ -178,6 +178,8 @@ func (t *Tunnel) handleSocksUDP(l *cio.Logger, rwc io.ReadWriteCloser) error {
 			return err
 		}
 
+		l.Infof("SOCKS UDP: recv query %s -> %s (%d bytes)", pkt.Src, pkt.Dst, len(pkt.Payload))
+
 		// Key by src|dst for proper per-flow connection tracking
 		connKey := pkt.Src + "|" + pkt.Dst
 		conn, exists, err := conns.dial(connKey, pkt.Dst)
@@ -191,7 +193,7 @@ func (t *Tunnel) handleSocksUDP(l *cio.Logger, rwc io.ReadWriteCloser) error {
 				l.Infof("SOCKS UDP: exceeded max connections (%d)", maxConns)
 				continue
 			}
-			l.Debugf("SOCKS UDP: new flow %s -> %s", pkt.Src, pkt.Dst)
+			l.Infof("SOCKS UDP: new flow %s -> %s", pkt.Src, pkt.Dst)
 			// Start reader goroutine for responses from this destination
 			go func(key, src, dst string, conn *udpConn) {
 				defer conns.remove(key)
@@ -201,12 +203,16 @@ func (t *Tunnel) handleSocksUDP(l *cio.Logger, rwc io.ReadWriteCloser) error {
 					conn.SetReadDeadline(time.Now().Add(deadline))
 					n, err := conn.Read(buf)
 					if err != nil {
-						if !os.IsTimeout(err) && err != io.EOF {
-							l.Debugf("SOCKS UDP: read from %s: %s", dst, err)
+						if os.IsTimeout(err) {
+							l.Infof("SOCKS UDP: flow %s -> %s timed out (idle %s)", src, dst, deadline)
+						} else if err != io.EOF {
+							l.Infof("SOCKS UDP: read from %s: %s", dst, err)
+						} else {
+							l.Infof("SOCKS UDP: flow %s -> %s EOF", src, dst)
 						}
 						return
 					}
-					l.Debugf("SOCKS UDP: response from %s (%d bytes) -> %s", dst, n, src)
+					l.Infof("SOCKS UDP: response from %s (%d bytes) -> %s", dst, n, src)
 					resp := socksUDPDatagram{
 						Src:     src,
 						Dst:     dst,
@@ -216,7 +222,7 @@ func (t *Tunnel) handleSocksUDP(l *cio.Logger, rwc io.ReadWriteCloser) error {
 					err = enc.Encode(&resp)
 					encMu.Unlock()
 					if err != nil {
-						l.Debugf("SOCKS UDP: encode response error: %s", err)
+						l.Infof("SOCKS UDP: encode response error: %s", err)
 						return
 					}
 				}
@@ -224,7 +230,7 @@ func (t *Tunnel) handleSocksUDP(l *cio.Logger, rwc io.ReadWriteCloser) error {
 		}
 
 		if _, err := conn.Write(pkt.Payload); err != nil {
-			l.Debugf("SOCKS UDP: write to %s: %s", pkt.Dst, err)
+			l.Infof("SOCKS UDP: write to %s: %s", pkt.Dst, err)
 		}
 	}
 }
