@@ -11,8 +11,17 @@ type udpPacket struct {
 	Payload []byte
 }
 
+// socksUDPDatagram carries UDP data through SSH for SOCKS5 UDP ASSOCIATE.
+// Unlike udpPacket (fixed destination), each datagram has a dynamic destination.
+type socksUDPDatagram struct {
+	Src     string // client's UDP source address (for routing responses back)
+	Dst     string // destination address host:port (dynamic per packet)
+	Payload []byte
+}
+
 func init() {
 	gob.Register(&udpPacket{})
+	gob.Register(&socksUDPDatagram{})
 }
 
 //udpChannel encodes/decodes udp payloads over a stream

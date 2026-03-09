@@ -41,7 +41,7 @@ func (t *Tunnel) handleSSHChannel(ch ssh.NewChannel) {
 	hostPort, proto := settings.L4Proto(remote)
 	udp := proto == "udp"
 	socks := hostPort == "socks"
-	if socks && t.socksServer == nil {
+	if socks && !udp && t.socksServer == nil {
 		t.Debugf("Denied socks request, please enable socks")
 		ch.Reject(ssh.Prohibited, "SOCKS5 is not enabled")
 		return
@@ -59,7 +59,10 @@ func (t *Tunnel) handleSSHChannel(ch ssh.NewChannel) {
 	//ready to handle
 	t.connStats.Open()
 	l.Debugf("Open %s", t.connStats.String())
-	if socks {
+	if socks && udp {
+		// SOCKS5 UDP ASSOCIATE: dynamic-destination UDP forwarding
+		err = t.handleSocksUDP(l, stream)
+	} else if socks {
 		err = t.handleSocks(stream)
 	} else if udp {
 		err = t.handleUDP(l, stream, hostPort)

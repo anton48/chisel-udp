@@ -153,3 +153,78 @@ type udpConn struct {
 	id string
 	net.Conn
 }
+
+// handleSocksUDP handles SOCKS5 UDP ASSOCIATE on the server (exit) side.
+// Each packet carries a dynamic destination address, unlike regular UDP
+// forwarding where the destination is fixed per channel.
+func (t *Tunnel) handleSocksUDP(l *cio.Logger, rwc io.ReadWriteCloser) error {
+	l.Infof("SOCKS UDP handler started")
+	conns := &udpConns{
+		Logger: l,
+		m:      map[string]*udpConn{},
+	}
+	defer conns.closeAll()
+
+	enc := gob.NewEncoder(rwc)
+	dec := gob.NewDecoder(rwc)
+	var encMu sync.Mutex
+	maxMTU := settings.EnvInt("UDP_MAX_SIZE", 9012)
+	maxConns := settings.EnvInt("UDP_MAX_CONNS", 2048)
+
+	for {
+		var pkt socksUDPDatagram
+		if err := dec.Decode(&pkt); err != nil {
+			l.Infof("SOCKS UDP handler ended: %s", err)
+			return err
+		}
+
+		// Key by src|dst for proper per-flow connection tracking
+		connKey := pkt.Src + "|" + pkt.Dst
+		conn, exists, err := conns.dial(connKey, pkt.Dst)
+		if err != nil {
+			l.Infof("SOCKS UDP: dial %s failed: %s", pkt.Dst, err)
+			continue
+		}
+
+		if !exists {
+			if conns.len() > maxConns {
+				l.Infof("SOCKS UDP: exceeded max connections (%d)", maxConns)
+				continue
+			}
+			l.Debugf("SOCKS UDP: new flow %s -> %s", pkt.Src, pkt.Dst)
+			// Start reader goroutine for responses from this destination
+			go func(key, src, dst string, conn *udpConn) {
+				defer conns.remove(key)
+				buf := make([]byte, maxMTU)
+				for {
+					deadline := settings.EnvDuration("UDP_DEADLINE", 15*time.Second)
+					conn.SetReadDeadline(time.Now().Add(deadline))
+					n, err := conn.Read(buf)
+					if err != nil {
+						if !os.IsTimeout(err) && err != io.EOF {
+							l.Debugf("SOCKS UDP: read from %s: %s", dst, err)
+						}
+						return
+					}
+					l.Debugf("SOCKS UDP: response from %s (%d bytes) -> %s", dst, n, src)
+					resp := socksUDPDatagram{
+						Src:     src,
+						Dst:     dst,
+						Payload: append([]byte(nil), buf[:n]...),
+					}
+					encMu.Lock()
+					err = enc.Encode(&resp)
+					encMu.Unlock()
+					if err != nil {
+						l.Debugf("SOCKS UDP: encode response error: %s", err)
+						return
+					}
+				}
+			}(connKey, pkt.Src, pkt.Dst, conn)
+		}
+
+		if _, err := conn.Write(pkt.Payload); err != nil {
+			l.Debugf("SOCKS UDP: write to %s: %s", pkt.Dst, err)
+		}
+	}
+}

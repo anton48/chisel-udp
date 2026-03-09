@@ -27,6 +27,7 @@ type Proxy struct {
 	dialer net.Dialer
 	tcp    *net.TCPListener
 	udp    *udpListener
+	udpMux *socksUDPMux
 	mu     sync.Mutex
 }
 
@@ -38,6 +39,7 @@ func NewProxy(logger *cio.Logger, sshTun sshTunnel, index int, remote *settings.
 		sshTun: sshTun,
 		id:     id,
 		remote: remote,
+		udpMux: newSocksUDPMux(logger, sshTun),
 	}
 	return p, p.listen()
 }
@@ -118,7 +120,11 @@ func (p *Proxy) runTCP(ctx context.Context) error {
 			close(done)
 			return err
 		}
-		go p.pipeRemote(ctx, src)
+		if p.remote.Socks {
+			go p.handleSocksConn(ctx, src)
+		} else {
+			go p.pipeRemote(ctx, src)
+		}
 	}
 }
 
